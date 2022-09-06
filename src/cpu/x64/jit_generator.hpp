@@ -147,6 +147,8 @@ public:
 
 private:
     const size_t xmm_len = 16;
+    const size_t ymm_len = 32;
+    const size_t zmm_len = 64;
 #ifdef _WIN32
     const size_t xmm_to_preserve_start = 6;
     const size_t xmm_to_preserve = 10;
@@ -181,6 +183,81 @@ public:
     const Xbyak::Reg64 reg_EVEX_max_8b_offt = rbp;
 
     inline size_t get_size_of_abi_save_regs() { return size_of_abi_save_regs; }
+
+    using Xbyak::CodeGenerator::push;
+    using Xbyak::CodeGenerator::pop;
+
+    inline void push(const Xbyak::Xmm &xmm) {
+        sub(rsp, xmm_len);
+        uni_vmovdqu(ptr[rsp], xmm);
+    }
+
+    inline void push(const std::vector<Xbyak::Xmm> &xmms) {
+        sub(rsp, xmms.size() * xmm_len);
+        for (size_t i = 0; i < xmms.size(); ++i) {
+            uni_vmovdqu(ptr[rsp + i * xmm_len], xmms[i]);
+        }
+    }
+
+    inline void push(const Xbyak::Ymm &ymm) {
+        sub(rsp, ymm_len);
+        uni_vmovdqu(ptr[rsp], ymm);
+    }
+
+    inline void push(const std::vector<Xbyak::Ymm> &ymms) {
+        sub(rsp, ymms.size() * ymm_len);
+        for (size_t i = 0; i < ymms.size(); ++i) {
+            uni_vmovdqu(ptr[rsp + i * ymm_len], ymms[i]);
+        }
+    }
+
+    inline void push(const Xbyak::Zmm &zmm) {
+        sub(rsp, zmm_len);
+        uni_vmovdqu(ptr[rsp], zmm);
+    }
+
+    inline void push(const std::vector<Xbyak::Zmm> &zmms) {
+        sub(rsp, zmms.size() * zmm_len);
+        for (size_t i = 0; i < zmms.size(); ++i) {
+            uni_vmovdqu(ptr[rsp + i * zmm_len], zmms[i]);
+        }
+    }
+
+    inline void pop(const Xbyak::Xmm &xmm) {
+        uni_vmovdqu(xmm, ptr[rsp]);
+        add(rsp, xmm_len);
+    }
+
+    inline void pop(const std::vector<Xbyak::Xmm> &xmms) {
+        for (size_t i = 0; i < xmms.size(); ++i) {
+            uni_vmovdqu(xmms[i], ptr[rsp + i * xmm_len]);
+        }
+        sub(rsp, xmms.size() * xmm_len);
+    }
+
+    inline void pop(const Xbyak::Ymm &ymm) {
+        uni_vmovdqu(ymm, ptr[rsp]);
+        add(rsp, ymm_len);
+    }
+
+    inline void pop(const std::vector<Xbyak::Ymm> &ymms) {
+        for (size_t i = 0; i < ymms.size(); ++i) {
+            uni_vmovdqu(ymms[i], ptr[rsp + i * ymm_len]);
+        }
+        sub(rsp, ymms.size() * ymm_len);
+    }
+
+    inline void pop(const Xbyak::Zmm &zmm) {
+        uni_vmovdqu(zmm, ptr[rsp]);
+        add(rsp, zmm_len);
+    }
+
+    inline void pop(const std::vector<Xbyak::Zmm> &zmms) {
+        for (size_t i = 0; i < zmms.size(); ++i) {
+            uni_vmovdqu(zmms[i], ptr[rsp + i * zmm_len]);
+        }
+        sub(rsp, zmms.size() * zmm_len);
+    }
 
     void preamble() {
         if (xmm_to_preserve) {
