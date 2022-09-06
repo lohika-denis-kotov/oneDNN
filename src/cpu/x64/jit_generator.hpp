@@ -147,6 +147,8 @@ public:
 
 private:
     const size_t xmm_len = 16;
+    const size_t ymm_len = 32;
+    const size_t zmm_len = 64;
 #ifdef _WIN32
     const size_t xmm_to_preserve_start = 6;
     const size_t xmm_to_preserve = 10;
@@ -181,6 +183,91 @@ public:
     const Xbyak::Reg64 reg_EVEX_max_8b_offt = rbp;
 
     inline size_t get_size_of_abi_save_regs() { return size_of_abi_save_regs; }
+
+    using Xbyak::CodeGenerator::push;
+    using Xbyak::CodeGenerator::pop;
+
+    inline void push(const Xbyak::Xmm &xmm) {
+        if (xmm.isXMM()) {
+            sub(rsp, xmm_len);
+            uni_vmovdqu(ptr[rsp], xmm);
+        } else if (xmm.isYMM()) {
+            sub(rsp, ymm_len);
+            uni_vmovdqu(ptr[rsp], Xbyak::Ymm{xmm.getIdx()});
+        } else if (xmm.isZMM()) {
+            sub(rsp, zmm_len);
+            uni_vmovdqu(ptr[rsp], Xbyak::Zmm{xmm.getIdx()});
+        }
+    }
+
+    inline void push(const std::vector<Xbyak::Xmm> &xmms) {
+        std::vector<std::function<void()>> deferred_movs{};
+        size_t offset = 0;
+        for (size_t i = 0; i < xmms.size(); ++i) {
+            const auto& xmm = xmms[i];
+            if (xmm.isXMM()) {
+                deferred_movs.emplace_back([this, offset, &xmm]() {
+                    uni_vmovdqu(ptr[rsp + offset], xmm);
+                });
+                offset += xmm_len;
+            } else if (xmm.isYMM()) {
+                deferred_movs.emplace_back([this, offset, &xmm]() {
+                    uni_vmovdqu(ptr[rsp + offset], Xbyak::Ymm{xmm.getIdx()});
+                });
+                offset += ymm_len;
+            } else if (xmm.isZMM()) {
+                deferred_movs.emplace_back([this, offset, &xmm]() {
+                    uni_vmovdqu(ptr[rsp + offset], Xbyak::Zmm{xmm.getIdx()});
+                });
+                offset += zmm_len;
+            }
+        }
+        sub(rsp, offset);
+        for (const auto& def_mov : deferred_movs) {
+            def_mov();
+        }
+    }
+
+    inline void pop(const Xbyak::Xmm &xmm) {
+        if (xmm.isXMM()) {
+            uni_vmovdqu(xmm, ptr[rsp]);
+            add(rsp, xmm_len);
+        } else if (xmm.isYMM()) {
+            uni_vmovdqu(Xbyak::Ymm{xmm.getIdx()}, ptr[rsp]);
+            add(rsp, ymm_len);
+        } else if (xmm.isZMM()) {
+            uni_vmovdqu(Xbyak::Zmm{xmm.getIdx()}, ptr[rsp]);
+            add(rsp, zmm_len);
+        }
+    }
+
+    inline void pop(const std::vector<Xbyak::Xmm> &xmms) {
+        std::vector<std::function<void()>> deferred_movs{};
+        size_t offset = 0;
+        for (size_t i = 0; i < xmms.size(); ++i) {
+            const auto& xmm = xmms[i];
+            if (xmm.isXMM()) {
+                deferred_movs.emplace_back([this, offset, &xmm]() {
+                    uni_vmovdqu(xmm, ptr[rsp + offset]);
+                });
+                offset += xmm_len;
+            } else if (xmm.isYMM()) {
+                deferred_movs.emplace_back([this, offset, &xmm]() {
+                    uni_vmovdqu(Xbyak::Ymm{xmm.getIdx()}, ptr[rsp + offset]);
+                });
+                offset += ymm_len;
+            } else if (xmm.isZMM()) {
+                deferred_movs.emplace_back([this, offset, &xmm]() {
+                    uni_vmovdqu(Xbyak::Zmm{xmm.getIdx()}, ptr[rsp + offset]);
+                });
+                offset += zmm_len;
+            }
+        }
+        for (const auto& def_mov : deferred_movs) {
+            def_mov();
+        }
+        add(rsp, offset);
+    }
 
     void preamble() {
         if (xmm_to_preserve) {
