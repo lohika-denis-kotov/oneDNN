@@ -164,6 +164,26 @@ private:
             = num_abi_save_gpr_regs * rax.getBit() / 8
             + xmm_to_preserve * xmm_len;
 
+    template<typename TOutReg, typename TInReg>
+    inline TOutReg get_free_reg(std::vector<int>& reg_idxs,
+                                std::vector<TInReg>& not_available) {
+        std::vector<int> not_available_idx(not_available.size());
+        std::transform(not_available.begin(), not_available.end(), not_available_idx.begin(),
+            [](const Xbyak::Reg& reg) {
+                return reg.getIdx();
+            });
+        auto removed = std::remove_if(reg_idxs.begin(), reg_idxs.end(),
+            [&not_available_idx](const int& reg_idx) {
+                return not_available_idx.end() != std::find(not_available_idx.begin(),
+                                                            not_available_idx.end(),
+                                                            reg_idx);
+            });
+        reg_idxs.erase(removed, reg_idxs.end());
+        TOutReg alloc_reg{reg_idxs.front()};
+        not_available.push_back(alloc_reg);
+        return alloc_reg;
+    }
+
 public:
     enum {
         _cmp_eq_oq = 0u,
@@ -414,6 +434,165 @@ public:
     void uni_vpxor(const Xbyak::Zmm &x1, const Xbyak::Zmm &x2,
             const Xbyak::Operand &op) {
         vpxord(x1, x2, op);
+    }
+
+    template<typename TReg>
+    inline TReg get_free_reg(std::vector<Xbyak::Reg>& not_available) {
+        static_assert(std::is_base_of<Xbyak::Reg, TReg>::value, "Xbyak::Reg should be base of Tmm");
+        const size_t regsNumber = 16;
+        std::vector<int> reg_idxs;
+        reg_idxs.reserve(regsNumber);
+        for (int i = 0; i < static_cast<int>(regsNumber); ++i) {
+            // NOTE: We should avoid allocation rsp, otherwise we could write in
+            //       wrong stack and crash application
+            if (rsp.getIdx() != i) {
+                reg_idxs.push_back(i);
+            }
+        }
+        return get_free_reg<TReg>(reg_idxs, not_available);
+    }
+
+    template<typename TVmm>
+    inline TVmm get_free_reg(std::vector<Xbyak::Xmm>& not_available) {
+        static_assert(std::is_base_of<Xbyak::Xmm, TVmm>::value, "Xbyak::Xmm should be base of TVmm");
+        std::vector<int> xmm_idxs(8);
+#ifdef XBYAK64
+        size_t simdNumber = 0;
+        if (is_valid_isa(cpu_isa_t::avx512_core)) {
+            simdNumber = x64::cpu_isa_traits<cpu_isa_t::avx512_core>::vlen;
+        } else if (is_valid_isa(cpu_isa_t::avx2)) {
+            simdNumber = x64::cpu_isa_traits<cpu_isa_t::avx2>::vlen;
+        } else {
+            simdNumber = x64::cpu_isa_traits<cpu_isa_t::sse41>::vlen;
+        }
+        xmm_idxs.reserve(simdNumber);
+        for (int i = 0; i < static_cast<int>(simdNumber); ++i) {
+            xmm_idxs.push_back(i);
+        }
+#endif
+        return get_free_reg<TVmm>(xmm_idxs, not_available);
+    }
+
+    inline void uni_vgatherdps(const Xbyak::Xmm &xmm_val,
+                               const Xbyak::Reg64 &reg_addr,
+                               const Xbyak::Xmm &xmm_index,
+                               const int &scale,
+                               const int &disp,
+                               const Xbyak::Reg &reg_mask) {
+        const size_t kDataTypeSize = sizeof(float);
+        if (is_valid_isa(cpu_isa_t::avx512_core)) {
+            assert(reg_mask.isOPMASK());
+            vgatherdps(xmm_val, ptr[reg_addr + xmm_index * scale + disp]);
+        } else if (is_valid_isa(cpu_isa_t::avx2)) {
+            assert(reg_mask.isYMM());
+            Xbyak::Ymm ymm_mask{reg_mask.getIdx()};
+            vgatherdps(xmm_val, ptr[reg_addr + xmm_index * scale + disp], ymm_mask);
+        } else {
+            const size_t kSimdWidth = x64::cpu_isa_traits<cpu_isa_t::sse41>::vlen / kDataTypeSize;
+            assert(reg_mask.isXMM());
+            Xbyak::Xmm xmm_mask{reg_mask.getIdx()};
+            assert(xmm_val.getKind() == xmm_index.getKind());
+            assert(xmm_index.getKind() == xmm_mask.getKind());
+
+            std::vector<Xbyak::Reg> not_available_reg{reg_addr};
+            const Xbyak::Reg64 idx = this->get_free_reg<Xbyak::Reg64>(not_available_reg);
+            const Xbyak::Reg64 mask = this->get_free_reg<Xbyak::Reg64>(not_available_reg);
+
+            push(idx);
+            push(mask);
+            xor_(idx, idx);
+            xor_(mask, mask);
+
+            for (int i = 0; i < static_cast<int>(kSimdWidth); i++) {
+                Xbyak::Label gather_end;
+                uni_vpextrd(mask.cvt32(), xmm_mask, i);
+                cmp(mask.cvt32(), 0xFFFFFFFF);
+                jne(gather_end, T_NEAR);
+                uni_vpextrd(idx.cvt32(), xmm_index, i);
+                Xbyak::Address addr = ptr[reg_addr + idx * scale + disp];
+                uni_vpinsrd(xmm_val, xmm_val, addr, i);
+                L(gather_end);
+            }
+            pop(mask);
+            pop(idx);
+        }
+    }
+
+    inline void uni_vscatterdps(const Xbyak::Reg64& reg_addr,
+                                const Xbyak::Xmm& xmm_index,
+                                const int scale,
+                                const int disp,
+                                const Xbyak::Xmm& xmm_val,
+                                const Xbyak::Reg& reg_mask) {
+        const size_t kDataTypeSize = sizeof(float);
+        if (is_valid_isa(cpu_isa_t::avx512_core)) {
+            assert(reg_mask.isOPMASK());
+            vscatterdps(ptr[reg_addr + xmm_index * scale + disp], xmm_val);
+        } else {
+            assert(reg_mask.isXMM() || reg_mask.isYMM());
+            const size_t kXmmSimdWidth = x64::cpu_isa_traits<cpu_isa_t::sse41>::vlen / kDataTypeSize;
+            const size_t kYmmSimdWidth = x64::cpu_isa_traits<cpu_isa_t::avx2>::vlen / kDataTypeSize;
+            Xbyak::Xmm xmm_mask{reg_mask.getIdx(), reg_mask.getKind(), static_cast<int>(reg_mask.getBit())};
+            assert(xmm_val.getKind() == xmm_index.getKind());
+            assert(xmm_index.getKind() == xmm_mask.getKind());
+
+            std::vector<Xbyak::Reg> not_available_reg{reg_addr};
+            std::vector<Xbyak::Xmm> not_available_xmm{xmm_index, xmm_val, xmm_mask};
+            const Xbyak::Reg64 idx = this->get_free_reg<Xbyak::Reg64>(not_available_reg);
+            const Xbyak::Reg64 mask = this->get_free_reg<Xbyak::Reg64>(not_available_reg);
+            const Xbyak::Reg64 val = this->get_free_reg<Xbyak::Reg64>(not_available_reg);
+            const Xbyak::Xmm xmm_mask_temp = this->get_free_reg<Xbyak::Xmm>(not_available_xmm);
+            const Xbyak::Xmm xmm_index_temp = this->get_free_reg<Xbyak::Xmm>(not_available_xmm);
+            const Xbyak::Xmm xmm_val_temp = this->get_free_reg<Xbyak::Xmm>(not_available_xmm);
+
+            push(idx);
+            push(mask);
+            push(val);
+            if (is_valid_isa(cpu_isa_t::avx2)) {
+                push(Xbyak::Ymm{xmm_mask_temp.getIdx()});
+                push(Xbyak::Ymm{xmm_index_temp.getIdx()});
+                push(Xbyak::Ymm{xmm_val_temp.getIdx()});
+            }
+            xor_(idx, idx);
+            xor_(mask, mask);
+            xor_(val, val);
+
+            auto store_xmm = [&](const Xbyak::Xmm& xmm_mask,
+                                 const Xbyak::Xmm& xmm_index,
+                                 const Xbyak::Xmm& xmm_val) {
+                for (int i = 0; i < static_cast<int>(kXmmSimdWidth); i++) {
+                    Xbyak::Label scatter_end;
+                    uni_vpextrd(mask.cvt32(), xmm_mask, i);
+                    cmp(mask.cvt32(), 0xFFFFFFFF);
+                    jne(scatter_end, T_NEAR);
+                    uni_vpextrd(idx.cvt32(), xmm_index, i);
+                    Xbyak::Address addr = ptr[reg_addr + idx * scale];
+                    uni_vpextrd(val.cvt32(), xmm_val, i);
+                    mov(addr, val.cvt32());
+                    L(scatter_end);
+                }
+            };
+
+            if (is_valid_isa(cpu_isa_t::avx2)) {
+                for (int i = 0; i < static_cast<int>(kYmmSimdWidth / kXmmSimdWidth); i++) {
+                    vextracti128(xmm_mask_temp, Xbyak::Ymm{xmm_mask.getIdx()}, i);
+                    vextracti128(xmm_index_temp, Xbyak::Ymm{xmm_index.getIdx()}, i);
+                    vextracti128(xmm_val_temp, Xbyak::Ymm{xmm_val.getIdx()}, i);
+                    store_xmm(xmm_mask_temp, xmm_index_temp, xmm_val_temp);
+                }
+            } else {
+                store_xmm(xmm_mask, xmm_index, xmm_val);
+            }
+
+            if (is_valid_isa(cpu_isa_t::avx2)) {
+                pop(Xbyak::Ymm{xmm_val_temp.getIdx()});
+                pop(Xbyak::Ymm{xmm_index_temp.getIdx()});
+                pop(Xbyak::Ymm{xmm_mask_temp.getIdx()});
+            }
+            pop(val);
+            pop(mask);
+            pop(idx);
+        }
     }
 
     void uni_vmovss(const Xbyak::Address &addr, const Xbyak::Xmm &x) {
