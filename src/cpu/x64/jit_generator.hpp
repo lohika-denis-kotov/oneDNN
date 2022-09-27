@@ -657,16 +657,22 @@ public:
         vdivps(x, op1, op2);
     }
 
-    void uni_vaddps(const Xbyak::Xmm &x, const Xbyak::Operand &op1,
+    void uni_vaddps(const Xbyak::Xmm &x, const Xbyak::Xmm &op1,
             const Xbyak::Operand &op2) {
         if (is_valid_isa(avx))
             vaddps(x, op1, op2);
         else {
-            if (!x.isEqualIfNotInherited(op1)) movups(x, op1);
-            addps(x, op2);
+            if (x.getIdx() == op1.getIdx()) {
+                addps(x, op2);
+            } else if (x.isEqualIfNotInherited(op2)) {
+                addps(x, op1);
+            } else {
+                movups(x, op1);
+                addps(x, op2);
+            }
         }
     }
-    void uni_vaddps(const Xbyak::Ymm &x, const Xbyak::Operand &op1,
+    void uni_vaddps(const Xbyak::Ymm &x, const Xbyak::Ymm &op1,
             const Xbyak::Operand &op2) {
         vaddps(x, op1, op2);
     }
@@ -775,16 +781,25 @@ public:
         vsubss(x, Xbyak::Xmm(op1.getIdx()), Xbyak::Xmm(op2.getIdx()));
     }
 
-    void uni_vsubps(const Xbyak::Xmm &x, const Xbyak::Operand &op1,
+    void uni_vsubps(const Xbyak::Xmm &x, const Xbyak::Xmm &op1,
             const Xbyak::Operand &op2) {
         if (is_valid_isa(avx))
             vsubps(x, op1, op2);
         else {
-            if (!x.isEqualIfNotInherited(op1)) movups(x, op1);
-            subps(x, op2);
+            if (x.getIdx() == op1.getIdx()) {
+                subps(x, op2);
+            } else if (x.isEqualIfNotInherited(op2)) {
+                push(op1);
+                subps(op1, op2);
+                movups(x, op1);
+                pop(op1);
+            } else {
+                movups(x, op1);
+                subps(x, op2);
+            }
         }
     }
-    void uni_vsubps(const Xbyak::Ymm &x, const Xbyak::Operand &op1,
+    void uni_vsubps(const Xbyak::Ymm &x, const Xbyak::Ymm &op1,
             const Xbyak::Operand &op2) {
         vsubps(x, op1, op2);
     }
@@ -818,13 +833,19 @@ public:
         }
     }
 
-    void uni_vpmulld(const Xbyak::Xmm &x1, const Xbyak::Xmm &x2,
-            const Xbyak::Operand &op) {
+    void uni_vpmulld(const Xbyak::Xmm &x, const Xbyak::Xmm &op1,
+            const Xbyak::Operand &op2) {
         if (is_valid_isa(avx)) {
-            vpmulld(x1, x2, op);
+            vpmulld(x, op1, op2);
         } else {
-            if (x1.getIdx() != x2.getIdx()) movdqa(x1, x2);
-            pmulld(x1, op);
+            if (x.getIdx() == op1.getIdx()) {
+                pmulld(x, op2);
+            } else if (x.isEqualIfNotInherited(op2)) {
+                pmulld(x, op1);
+            } else {
+                movdqa(x, op1);
+                pmulld(x, op2);
+            }
         }
     }
     void uni_vpmulld(const Xbyak::Ymm &x1, const Xbyak::Ymm &x2,
@@ -832,16 +853,22 @@ public:
         vpmulld(x1, x2, op);
     }
 
-    void uni_vmulps(const Xbyak::Xmm &x, const Xbyak::Operand &op1,
+    void uni_vmulps(const Xbyak::Xmm &x, const Xbyak::Xmm &op1,
             const Xbyak::Operand &op2) {
         if (is_valid_isa(avx))
             vmulps(x, op1, op2);
         else {
-            if (!x.isEqualIfNotInherited(op1)) movups(x, op1);
-            mulps(x, op2);
+            if (x.getIdx() == op1.getIdx()) {
+                mulps(x, op2);
+            } else if (x.isEqualIfNotInherited(op2)) {
+                mulps(x, op1);
+            } else {
+                movups(x, op1);
+                mulps(x, op2);
+            }
         }
     }
-    void uni_vmulps(const Xbyak::Ymm &x, const Xbyak::Operand &op1,
+    void uni_vmulps(const Xbyak::Ymm &x, const Xbyak::Ymm &op1,
             const Xbyak::Operand &op2) {
         vmulps(x, op1, op2);
     }
@@ -1243,16 +1270,22 @@ public:
         vpsrld(x, op, imm);
     }
 
-    void uni_vmaxps(const Xbyak::Xmm &x, const Xbyak::Operand &op1,
+    void uni_vmaxps(const Xbyak::Xmm &x, const Xbyak::Xmm &op1,
             const Xbyak::Operand &op2) {
         if (is_valid_isa(avx))
             vmaxps(x, op1, op2);
         else {
-            if (!x.isEqualIfNotInherited(op1)) movups(x, op1);
-            maxps(x, op2);
+            if (x.getIdx() == op1.getIdx()) {
+                maxps(x, op2);
+            } else if (x.isEqualIfNotInherited(op2)) {
+                maxps(x, op1);
+            } else {
+                movups(x, op1);
+                maxps(x, op2);
+            }
         }
     }
-    void uni_vmaxps(const Xbyak::Ymm &x, const Xbyak::Operand &op1,
+    void uni_vmaxps(const Xbyak::Ymm &x, const Xbyak::Ymm &op1,
             const Xbyak::Operand &op2) {
         vmaxps(x, op1, op2);
     }
@@ -1267,17 +1300,23 @@ public:
         }
     }
 
-    void uni_vminps(const Xbyak::Xmm &x, const Xbyak::Operand &op1,
+    void uni_vminps(const Xbyak::Xmm &x, const Xbyak::Xmm &op1,
             const Xbyak::Operand &op2) {
         if (is_valid_isa(avx))
             vminps(x, op1, op2);
         else {
-            if (!x.isEqualIfNotInherited(op1)) movups(x, op1);
-            minps(x, op2);
+            if (x.getIdx() == op1.getIdx()) {
+                minps(x, op2);
+            } else if (x.isEqualIfNotInherited(op2)) {
+                minps(x, op1);
+            } else {
+                movups(x, op1);
+                minps(x, op2);
+            }
         }
     }
 
-    void uni_vminps(const Xbyak::Ymm &x, const Xbyak::Operand &op1,
+    void uni_vminps(const Xbyak::Ymm &x, const Xbyak::Ymm &op1,
             const Xbyak::Operand &op2) {
         vminps(x, op1, op2);
     }
@@ -1314,13 +1353,22 @@ public:
         vpmovzxbd(y, op);
     }
 
-    void uni_vcmpps(const Xbyak::Xmm &x1, const Xbyak::Xmm &x2,
-            const Xbyak::Operand &op, int cmp_predicate) {
+    void uni_vcmpps(const Xbyak::Xmm &x, const Xbyak::Xmm &op1,
+            const Xbyak::Operand &op2, int cmp_predicate) {
         if (is_valid_isa(avx))
-            vcmpps(x1, x2, op, cmp_predicate);
+            vcmpps(x, op1, op2, cmp_predicate);
         else {
-            if (x1.getIdx() != x2.getIdx()) uni_vmovups(x1, x2);
-            cmpps(x1, op, cmp_predicate);
+            if (x.getIdx() == op1.getIdx()) {
+                cmpps(x, op2, cmp_predicate);
+            } else if (x.isEqualIfNotInherited(op2)) {
+                push(op1);
+                cmpps(op1, op2, cmp_predicate);
+                movups(x, op1);
+                pop(op1);
+            } else {
+                movups(x, op1);
+                cmpps(x, op2, cmp_predicate);
+            }
         }
     }
     void uni_vcmpps(const Xbyak::Ymm &x1, const Xbyak::Ymm &x2,
