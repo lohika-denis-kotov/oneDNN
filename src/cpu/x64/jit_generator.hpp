@@ -147,6 +147,8 @@ public:
 
 private:
     const size_t xmm_len = 16;
+    const size_t ymm_len = 32;
+    const size_t zmm_len = 64;
 #ifdef _WIN32
     const size_t xmm_to_preserve_start = 6;
     const size_t xmm_to_preserve = 10;
@@ -181,6 +183,35 @@ public:
     const Xbyak::Reg64 reg_EVEX_max_8b_offt = rbp;
 
     inline size_t get_size_of_abi_save_regs() { return size_of_abi_save_regs; }
+
+    using Xbyak::CodeGenerator::push;
+    using Xbyak::CodeGenerator::pop;
+
+    inline void push(const Xbyak::Xmm &xmm) {
+        if (xmm.isXMM()) {
+            sub(rsp, xmm_len);
+            uni_vmovdqu(ptr[rsp], xmm);
+        } else if (xmm.isYMM()) {
+            sub(rsp, ymm_len);
+            uni_vmovdqu(ptr[rsp], Xbyak::Ymm{xmm.getIdx()});
+        } else if (xmm.isZMM()) {
+            sub(rsp, zmm_len);
+            uni_vmovdqu(ptr[rsp], Xbyak::Zmm{xmm.getIdx()});
+        }
+    }
+
+    inline void pop(const Xbyak::Xmm &xmm) {
+        if (xmm.isXMM()) {
+            uni_vmovdqu(xmm, ptr[rsp]);
+            add(rsp, xmm_len);
+        } else if (xmm.isYMM()) {
+            uni_vmovdqu(Xbyak::Ymm{xmm.getIdx()}, ptr[rsp]);
+            add(rsp, ymm_len);
+        } else if (xmm.isZMM()) {
+            uni_vmovdqu(Xbyak::Zmm{xmm.getIdx()}, ptr[rsp]);
+            add(rsp, zmm_len);
+        }
+    }
 
     void preamble() {
         if (xmm_to_preserve) {
